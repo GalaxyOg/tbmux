@@ -75,6 +75,29 @@ func TestLoadRequiresExistingFile(t *testing.T) {
 	}
 }
 
+func TestSaveAndReload(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.toml")
+	cfg, err := Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.WatchedRoots = []WatchedRoot{{Path: "~/exp", Alias: "exp"}}
+	if err := Save(p, cfg); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+	got, err := Load(p)
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	if len(got.WatchedRoots) != 1 {
+		t.Fatalf("expected 1 watched root, got %d", len(got.WatchedRoots))
+	}
+	if got.WatchedRoots[0].Alias != "exp" {
+		t.Fatalf("unexpected alias: %s", got.WatchedRoots[0].Alias)
+	}
+}
+
 func TestExpandHomePath(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")

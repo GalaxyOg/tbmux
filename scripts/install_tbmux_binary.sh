@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # Env vars:
 #   TBMUX_REPO=GalaxyOg/tbmux
-#   TBMUX_VERSION=latest | v0.1.0
+#   TBMUX_VERSION=latest | v0.2.0
 #   TBMUX_PREFIX=$HOME/.local
 
 REPO="${TBMUX_REPO:-GalaxyOg/tbmux}"

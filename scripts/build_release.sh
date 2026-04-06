@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Build release archives for tbmux.
 # Usage:
-#   VERSION=v0.1.0 bash scripts/build_release.sh
+#   VERSION=v0.2.0 bash scripts/build_release.sh
 # Output:
 #   dist/tbmux_<version>_linux_amd64.tar.gz
 #   dist/tbmux_<version>_linux_arm64.tar.gz

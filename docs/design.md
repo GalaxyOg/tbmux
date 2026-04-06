@@ -23,3 +23,24 @@
 - `tbmux status --json`
 - `tbmux doctor --json`
 - `tbmux tailscale status --json`
+
+## TUI 设计（v0.2）
+
+- 框架：Bubble Tea（事件驱动，键盘交互稳定，后续可扩展实时刷新）
+- 命令：`tbmux tui [--today|--hours|--days|--running|--not-running|--under|--match]`
+- 模型分层：
+  - discovered runs：扫描全集（state）
+  - filtered view：当前筛选视图（TUI 状态）
+  - draft selected：TUI 内存草稿集合
+  - apply：落盘 state + 更新 symlink 暴露目录
+- 交互键位：
+  - `j/k`、方向键：移动
+  - `space`：切换 selected
+  - `/`：搜索
+  - `r`：running 筛选轮换
+  - `t`：today 开关
+  - `c`：清空筛选
+  - `s`：手动 sync
+  - `a`：apply
+  - `q`：退出（dirty 时二次确认）
+  - `?`：帮助

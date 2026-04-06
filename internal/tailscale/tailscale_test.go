@@ -118,3 +118,13 @@ func TestDetectNotFound(t *testing.T) {
 		t.Fatal("expected error when tailscale not found")
 	}
 }
+
+func TestParseServeURL(t *testing.T) {
+	out := `https://drlserver.tailb5bd65.ts.net (tailnet only)
+|-- / proxy http://127.0.0.1:6786
+`
+	u := ParseServeURL(out)
+	if u != "https://drlserver.tailb5bd65.ts.net" {
+		t.Fatalf("unexpected url: %s", u)
+	}
+}

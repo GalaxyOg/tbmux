@@ -138,6 +138,23 @@ func WriteDefault(path string) (Config, error) {
 	return cfg, nil
 }
 
+func Save(path string, cfg Config) error {
+	cfg.normalizePaths()
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	if err := ensureParent(path); err != nil {
+		return err
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	enc := toml.NewEncoder(f)
+	return enc.Encode(cfg)
+}
+
 func Load(path string) (Config, error) {
 	cfg, err := Default()
 	if err != nil {

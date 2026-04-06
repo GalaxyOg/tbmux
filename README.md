@@ -35,7 +35,7 @@ curl -fsSL https://raw.githubusercontent.com/GalaxyOg/tbmux/master/scripts/insta
 可选参数：
 
 - `TBMUX_REPO=GalaxyOg/tbmux`（默认）
-- `TBMUX_VERSION=latest` 或固定版本（例如 `v0.1.0`）
+- `TBMUX_VERSION=latest` 或固定版本（例如 `v0.2.0`）
 - `TBMUX_PREFIX=$HOME/.local`（安装前缀）
 
 ### 2. 需要源码构建时，再安装 Go（非 root）
@@ -69,27 +69,6 @@ $HOME/.local/go/bin/go install ./cmd/tbmux
 
 
 
-### 3. 无 git 一键安装（推荐给其他机器）
-
-如果目标机器没有安装 git，可直接：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/GalaxyOg/tbmux/master/scripts/install_tbmux_no_git.sh | bash
-```
-
-可选环境变量：
-
-- `TBMUX_REPO`：默认 `GalaxyOg/tbmux`
-- `TBMUX_REF`：默认 `master`（若不存在会自动尝试 `main`）
-- `TBMUX_PREFIX`：默认 `~/.local`
-- `TBMUX_AUTO_INSTALL_GO`：默认 `1`（无 go 时自动安装）
-
-安装后若命令未生效：
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
 ## 首次使用
 
 ### 1. 初始化配置
@@ -120,6 +99,33 @@ path = "/mnt/experiments"
 alias = "experiments"
 ```
 
+### 2.1 设置 TensorBoard 可执行文件路径（重点）
+
+如果 `tbmux start` 报 `未找到 tensorboard 可执行文件`，请手动配置绝对路径：
+
+1. 查找路径
+
+```bash
+which tensorboard
+# 如果在 conda 环境里：
+conda run -n <env_name> which tensorboard
+```
+
+2. 写入配置
+
+```toml
+[tensorboard]
+binary = "/home/xxx/anaconda3/envs/<env_name>/bin/tensorboard"
+host = "127.0.0.1"
+port = 6006
+extra_args = []
+```
+
+说明：
+
+- `binary=""` 时按 PATH/常见系统路径自动查找
+- conda 场景建议显式写绝对路径，最稳定
+
 ### 3. 发现 run 并选择展示集合
 
 ```bash
@@ -129,6 +135,22 @@ tbmux select by-filter --running --set
 tbmux select apply
 ```
 
+常见过滤示例：
+
+```bash
+# 仅最近 12 小时
+tbmux list --hours 12
+
+# 仅 running 且位于某路径
+tbmux list --running --under /home/yh/Algo_test/ReinFlow
+
+# 按关键词筛选并设置为当前展示集合
+tbmux select by-filter --match ppo --set
+
+# 按路径筛选加入展示集合
+tbmux select by-filter --under /home/yh/Algo_test/ReinFlow
+```
+
 ### 4. 启动 TensorBoard
 
 ```bash
@@ -136,6 +158,12 @@ tbmux start
 tbmux status
 tbmux open
 ```
+
+说明：`tbmux start` 和 `tbmux open` 现在会同时输出：
+
+- 本机访问地址（127.0.0.1）
+- 局域网候选地址（本机网卡 IP）
+- 若已开启 `tailscale serve`，还会输出 tailnet URL
 
 ### 5. Tailscale 暴露（可选）
 
@@ -150,6 +178,7 @@ tbmux tailscale serve
 
 - `tbmux init`
 - `tbmux sync [--apply] [--json]`
+- `tbmux tui`（交互式：配置 roots/过滤条件/selected 管理）
 - `tbmux list [--today|--hours N|--days N|--running|--not-running|--under PATH|--match Q] [--json]`
 - `tbmux selected list [--json]`
 - `tbmux select clear`
@@ -166,6 +195,32 @@ tbmux tailscale serve
 - `tbmux tailscale status [--json]`
 - `tbmux tailscale serve [--dry-run] [--json]`
 - `tbmux config path|example`
+
+`status/list/doctor` 等人类可读输出默认带颜色；`--json` 输出不带颜色，适合脚本。
+
+## TUI 交互
+
+执行：
+
+```bash
+tbmux tui
+```
+
+当前 TUI 可直接完成：
+
+- 管理 `watched_roots`（增删）
+- 设置过滤条件（today/hours/days/running/under/match）
+- 查看过滤后的 discovered runs
+- 查看当前 selected（正在展示集合）
+- 按当前过滤条件 `set/add/remove` selected
+- apply selected 到 symlink 暴露目录
+
+TUI 与 CLI 的关系：
+
+- TUI 中 `space` 只修改内存里的 draft selected（不立即落盘）
+- 按 `a` 才会等价执行“保存 selected + apply 到 symlink”
+- 等价 CLI 流程：`tbmux select ...` + `tbmux select apply`
+- 若有未 apply 变更，`q` 会先提示，再次 `q` 才退出并丢弃草稿
 
 ## 配置文件
 
@@ -248,14 +303,14 @@ GOCACHE=/tmp/go-build GOPATH=/tmp/go GOMODCACHE=/tmp/go/pkg/mod GOPROXY=https://
 
 发布方式：
 
-1. 打 tag 并推送（例如 `v0.1.0`）
+1. 打 tag 并推送（例如 `v0.2.0`）
 2. GitHub Actions 自动构建并发布 release 资产
 3. 用户可用 `scripts/install_tbmux_binary.sh` 直接安装对应版本
 
 本地手工打包（可选）：
 
 ```bash
-VERSION=v0.1.0 bash scripts/build_release.sh
+VERSION=v0.2.0 bash scripts/build_release.sh
 ```
 
 输出：

@@ -4,7 +4,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,9 +19,10 @@ import (
 	"tbmux/internal/runs"
 	"tbmux/internal/selection"
 	"tbmux/internal/tailscale"
+	"tbmux/internal/tui"
 )
 
-var version = "dev"
+var version = "v0.2.0-dev"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -53,6 +56,8 @@ func run(args []string) int {
 	case "version":
 		fmt.Println(version)
 		return 0
+	case "tui":
+		return cmdTUI(configPath, sub)
 	case "sync":
 		return cmdSync(configPath, sub)
 	case "list":
@@ -97,13 +102,14 @@ func printRootUsage() {
 核心命令:
   init
   version
+  tui [--today|--hours N|--days N|--running|--not-running|--under PATH|--match Q]
   sync [--apply]
   list [--today|--hours N|--days N|--running|--not-running|--under PATH|--match Q] [--json]
   selected list [--json]
   select clear|add|remove|by-filter|apply
   start|stop|restart|status
   doctor [--json]
-  tailscale status|serve
+	tailscale status|serve
   config path|example
 `)
 }
@@ -256,7 +262,11 @@ func buildFilter(args []string) (model.Filter, bool, error) {
 func renderRunList(runs []model.RunRecord) {
 	fmt.Printf("%-12s  %-8s  %-20s  %-40s  %s\n", "ID", "RUNNING", "UPDATED", "NAME", "SOURCE")
 	for _, run := range runs {
-		fmt.Printf("%-12s  %-8t  %-20s  %-40s  %s\n", run.ID, run.IsRunning, run.LastUpdatedAt.Format(time.RFC3339), run.Name, run.SourcePath)
+		runningText := cliutil.Red("NO")
+		if run.IsRunning {
+			runningText = cliutil.Green("YES")
+		}
+		fmt.Printf("%-12s  %-8s  %-20s  %-40s  %s\n", run.ID, runningText, run.LastUpdatedAt.Format(time.RFC3339), run.Name, run.SourcePath)
 	}
 }
 
@@ -447,7 +457,7 @@ func cmdStart(configPath string, args []string) int {
 		return 1
 	}
 	fmt.Printf("tensorboard 已启动 pid=%d\n", pid)
-	fmt.Printf("URL: http://%s:%d\n", cfg.TensorBoard.Host, cfg.TensorBoard.Port)
+	printAccessHints(cfg)
 	return 0
 }
 
@@ -500,11 +510,15 @@ func cmdStatus(configPath string, args []string) int {
 		_ = cliutil.PrintJSON(os.Stdout, status)
 		return 0
 	}
-	fmt.Printf("running: %t\n", running)
+	fmt.Printf("running: %s\n", cliutil.StatusBool(running))
 	fmt.Printf("pid: %d\n", pid)
-	fmt.Printf("url: %s\n", status["url"])
+	fmt.Printf("url: %s\n", cliutil.Blue(status["url"].(string)))
 	fmt.Printf("discovered: %d\n", len(st.Discovered))
-	fmt.Printf("selected: %d\n", len(st.Selected))
+	if len(st.Selected) == 0 {
+		fmt.Printf("selected: %s\n", cliutil.Yellow("0"))
+	} else {
+		fmt.Printf("selected: %s\n", cliutil.Green(fmt.Sprintf("%d", len(st.Selected))))
+	}
 	fmt.Printf("selected_dir: %s\n", status["selected_dir"])
 	return 0
 }
@@ -515,7 +529,7 @@ func cmdOpen(configPath string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Printf("http://%s:%d\n", cfg.TensorBoard.Host, cfg.TensorBoard.Port)
+	printAccessHints(cfg)
 	return 0
 }
 
@@ -537,9 +551,116 @@ func cmdDoctor(configPath string, args []string) int {
 		return 0
 	}
 	for _, it := range report.Items {
-		fmt.Printf("[%s] %-28s %s\n", strings.ToUpper(it.Status), it.Name, it.Message)
+		fmt.Printf("[%s] %-28s %s\n", cliutil.StatusWord(it.Status), it.Name, it.Message)
 	}
 	return 0
+}
+
+func cmdTUI(configPath string, args []string) int {
+	filter, err := parseTUIFilterArgs(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+
+	if err := tui.Run(configPath, tui.Options{InitialFilter: filter}); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
+}
+
+func parseTUIFilterArgs(args []string) (model.Filter, error) {
+	fs := flag.NewFlagSet("tui", flag.ContinueOnError)
+	today := fs.Bool("today", false, "初始筛选: today")
+	hours := fs.Int("hours", 0, "初始筛选: 最近 N 小时")
+	days := fs.Int("days", 0, "初始筛选: 最近 N 天")
+	running := fs.Bool("running", false, "初始筛选: running")
+	notRunning := fs.Bool("not-running", false, "初始筛选: not-running")
+	under := fs.String("under", "", "初始筛选: under path")
+	match := fs.String("match", "", "初始筛选: 关键词")
+	fs.SetOutput(os.Stderr)
+	if err := fs.Parse(args); err != nil {
+		return model.Filter{}, err
+	}
+	if *running && *notRunning {
+		return model.Filter{}, errors.New("--running 与 --not-running 不能同时使用")
+	}
+	var runningOnly *bool
+	if *running {
+		v := true
+		runningOnly = &v
+	}
+	if *notRunning {
+		v := false
+		runningOnly = &v
+	}
+	return model.Filter{
+		Today:       *today,
+		Hours:       *hours,
+		Days:        *days,
+		RunningOnly: runningOnly,
+		Under:       *under,
+		Match:       *match,
+	}, nil
+}
+
+func printAccessHints(cfg config.Config) {
+	localURL := fmt.Sprintf("http://%s:%d", cfg.TensorBoard.Host, cfg.TensorBoard.Port)
+	fmt.Printf("本机访问: %s\n", cliutil.Blue(localURL))
+
+	lan := lanCandidates(cfg.TensorBoard.Port)
+	if len(lan) > 0 {
+		fmt.Println("局域网候选地址:")
+		for _, u := range lan {
+			fmt.Printf("- %s\n", u)
+		}
+	}
+
+	if det, err := tailscale.Detect(cfg.Tailscale.Binary); err == nil {
+		if out, err := tailscale.ServeStatus(det.Path); err == nil {
+			if u := tailscale.ParseServeURL(out); u != "" {
+				fmt.Printf("Tailnet 访问: %s\n", cliutil.Green(u))
+				return
+			}
+		}
+		fmt.Println("Tailnet 访问: 未检测到 tailscale serve 入口，可执行 `tbmux tailscale serve --dry-run`")
+	}
+}
+
+func lanCandidates(port int) []string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0)
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := ifc.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ip, _, err := net.ParseCIDR(addr.String())
+			if err != nil {
+				continue
+			}
+			if ip == nil || ip.IsLoopback() || ip.To4() == nil {
+				continue
+			}
+			u := fmt.Sprintf("http://%s:%d", ip.String(), port)
+			if _, ok := seen[u]; ok {
+				continue
+			}
+			seen[u] = struct{}{}
+			out = append(out, u)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func cmdTailscale(configPath string, args []string) int {

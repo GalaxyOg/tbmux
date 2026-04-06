@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 )
@@ -69,6 +70,21 @@ func RunServe(bin, url string) (string, error) {
 		return string(out), err
 	}
 	return string(out), nil
+}
+
+func ServeStatus(bin string) (string, error) {
+	cmd := exec.Command(bin, "serve", "status")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(out), err
+	}
+	return string(out), nil
+}
+
+func ParseServeURL(output string) string {
+	re := regexp.MustCompile(`https?://[^\s]+`)
+	m := re.FindString(output)
+	return strings.TrimSpace(m)
 }
 
 func commonCandidates() []string {
