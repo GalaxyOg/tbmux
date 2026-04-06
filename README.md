@@ -17,7 +17,28 @@
 - 已安装 TensorBoard（`tensorboard` 命令可用）
 - 可选：已安装 Tailscale（用于 tailnet 暴露）
 
-### 1. 安装 Go（非 root）
+### 1. 无需 Go 的安装方式（推荐）
+
+直接安装预编译二进制（不需要 Go 工具链）：
+
+```bash
+bash scripts/install_tbmux_binary.sh
+tbmux version
+```
+
+也可以远程执行（适合没有 git 的机器）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/GalaxyOg/tbmux/master/scripts/install_tbmux_binary.sh | bash
+```
+
+可选参数：
+
+- `TBMUX_REPO=GalaxyOg/tbmux`（默认）
+- `TBMUX_VERSION=latest` 或固定版本（例如 `v0.1.0`）
+- `TBMUX_PREFIX=$HOME/.local`（安装前缀）
+
+### 2. 需要源码构建时，再安装 Go（非 root）
 
 仓库已提供脚本：
 
@@ -29,7 +50,7 @@ go version
 
 说明：脚本会自动从 `go.dev` 拉取最新稳定版，安装到 `~/.local/go`，并写入 `~/.bashrc`。
 
-### 2. 安装 tbmux
+### 3. 源码构建安装 tbmux
 
 方式 A：在仓库内编译并放到 `~/.local/bin`
 
@@ -44,6 +65,29 @@ $HOME/.local/go/bin/go build -o ~/.local/bin/tbmux ./cmd/tbmux
 ```bash
 $HOME/.local/go/bin/go install ./cmd/tbmux
 ~/go/bin/tbmux --help
+```
+
+
+
+### 3. 无 git 一键安装（推荐给其他机器）
+
+如果目标机器没有安装 git，可直接：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/GalaxyOg/tbmux/master/scripts/install_tbmux_no_git.sh | bash
+```
+
+可选环境变量：
+
+- `TBMUX_REPO`：默认 `GalaxyOg/tbmux`
+- `TBMUX_REF`：默认 `master`（若不存在会自动尝试 `main`）
+- `TBMUX_PREFIX`：默认 `~/.local`
+- `TBMUX_AUTO_INSTALL_GO`：默认 `1`（无 go 时自动安装）
+
+安装后若命令未生效：
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ## 首次使用
@@ -198,6 +242,28 @@ GOCACHE=/tmp/go-build GOPATH=/tmp/go GOMODCACHE=/tmp/go/pkg/mod GOPROXY=https://
 
 当前仓库已通过 `go test ./...`。
 
+## 维护者发布（二进制）
+
+仓库已提供自动发布流程：`.github/workflows/release.yml`
+
+发布方式：
+
+1. 打 tag 并推送（例如 `v0.1.0`）
+2. GitHub Actions 自动构建并发布 release 资产
+3. 用户可用 `scripts/install_tbmux_binary.sh` 直接安装对应版本
+
+本地手工打包（可选）：
+
+```bash
+VERSION=v0.1.0 bash scripts/build_release.sh
+```
+
+输出：
+
+- `dist/tbmux_<version>_linux_amd64.tar.gz`
+- `dist/tbmux_<version>_linux_arm64.tar.gz`
+- `dist/sha256sums.txt`
+
 ## 仓库结构
 
 - `cmd/tbmux`: CLI 入口
@@ -211,3 +277,5 @@ GOCACHE=/tmp/go-build GOPATH=/tmp/go GOMODCACHE=/tmp/go/pkg/mod GOPROXY=https://
 - `examples/config.toml`: 示例配置
 - `docs/design.md`: 设计说明
 - `scripts/install_go_user.sh`: 非 root Go 安装脚本
+- `scripts/install_tbmux_binary.sh`: 预编译二进制安装脚本（无需 Go）
+- `scripts/build_release.sh`: release 打包脚本

@@ -19,6 +19,8 @@ import (
 	"tbmux/internal/tailscale"
 )
 
+var version = "dev"
+
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
@@ -48,6 +50,9 @@ func run(args []string) int {
 		return cmdInit(configPath, sub)
 	case "config":
 		return cmdConfig(configPath, sub)
+	case "version":
+		fmt.Println(version)
+		return 0
 	case "sync":
 		return cmdSync(configPath, sub)
 	case "list":
@@ -91,6 +96,7 @@ func printRootUsage() {
 
 核心命令:
   init
+  version
   sync [--apply]
   list [--today|--hours N|--days N|--running|--not-running|--under PATH|--match Q] [--json]
   selected list [--json]
