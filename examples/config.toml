@@ -1,0 +1,29 @@
+exclude_patterns = ["*/.git/*", "*/__pycache__/*"]
+
+[[watched_roots]]
+path = "/data/trainings"
+alias = "trainings"
+
+[[watched_roots]]
+path = "/mnt/experiments"
+alias = "experiments"
+
+[tensorboard]
+binary = ""
+host = "127.0.0.1"
+port = 6006
+extra_args = []
+
+[managed]
+run_dir = "~/.local/share/tbmux/runs"
+state_path = "~/.local/state/tbmux/state.json"
+pid_path = "~/.local/state/tbmux/tensorboard.pid"
+log_path = "~/.local/state/tbmux/tensorboard.log"
+cleanup_stale = true
+
+[scan]
+running_window_minutes = 15
+
+[tailscale]
+binary = ""
+serve_url = "http://127.0.0.1:6006"

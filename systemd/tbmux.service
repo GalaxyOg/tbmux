@@ -1,0 +1,14 @@
+[Unit]
+Description=tbmux managed TensorBoard
+After=network.target
+
+[Service]
+Type=simple
+Environment=TBMUX_CONFIG=%h/.config/tbmux/config.toml
+ExecStart=%h/.local/bin/tbmux --config ${TBMUX_CONFIG} start
+ExecStop=%h/.local/bin/tbmux --config ${TBMUX_CONFIG} stop
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

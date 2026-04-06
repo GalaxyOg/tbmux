@@ -1,0 +1,10 @@
+[Unit]
+Description=Run tbmux sync periodically
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+Unit=tbmux-sync.service
+
+[Install]
+WantedBy=timers.target

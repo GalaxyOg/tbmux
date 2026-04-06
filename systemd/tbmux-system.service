@@ -1,0 +1,16 @@
+[Unit]
+Description=tbmux managed TensorBoard (system)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Environment=TBMUX_CONFIG=/home/ubuntu/.config/tbmux/config.toml
+ExecStart=/usr/local/bin/tbmux --config ${TBMUX_CONFIG} start
+ExecStop=/usr/local/bin/tbmux --config ${TBMUX_CONFIG} stop
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

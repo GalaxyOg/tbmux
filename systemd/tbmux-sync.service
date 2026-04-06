@@ -1,0 +1,7 @@
+[Unit]
+Description=tbmux sync and apply
+
+[Service]
+Type=oneshot
+Environment=TBMUX_CONFIG=%h/.config/tbmux/config.toml
+ExecStart=%h/.local/bin/tbmux --config ${TBMUX_CONFIG} sync --apply
