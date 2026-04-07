@@ -176,9 +176,10 @@ tbmux tailscale serve
 
 ## 关键命令
 
+- `tbmux`（交互终端中默认进入 TUI）
 - `tbmux init`
 - `tbmux sync [--apply] [--json]`
-- `tbmux tui`（交互式：配置 roots/过滤条件/selected 管理）
+- `tbmux tui`（交互式：筛选/浏览/选择/apply）
 - `tbmux list [--today|--hours N|--days N|--running|--not-running|--under PATH|--match Q] [--json]`
 - `tbmux selected list [--json]`
 - `tbmux select clear`
@@ -206,18 +207,34 @@ tbmux tailscale serve
 tbmux tui
 ```
 
+快捷键：
+
+- `j/k` 或方向键：上下移动
+- `space`：切换当前项 selected
+- `x`：清空全部 draft selected
+- `/`：搜索
+- `r`：running 筛选轮换
+- `t`：today 开关
+- `c`：清空筛选
+- `s`：sync discovered
+- `a`：apply
+- `q`：退出（dirty 时二次确认）
+- `?`：帮助
+
 当前 TUI 可直接完成：
 
-- 管理 `watched_roots`（增删）
 - 设置过滤条件（today/hours/days/running/under/match）
 - 查看过滤后的 discovered runs
 - 查看当前 selected（正在展示集合）
-- 按当前过滤条件 `set/add/remove` selected
-- apply selected 到 symlink 暴露目录
+- 光标滚动跟随（长列表下移时窗口自动跟随）
+- 一键清空全部 draft selected（`x`）
+- apply selected 到 symlink 暴露目录（`a`）
+- 窄终端下自动切换为单栏布局
 
 TUI 与 CLI 的关系：
 
 - TUI 中 `space` 只修改内存里的 draft selected（不立即落盘）
+- TUI 中 `x` 可一键清空所有 draft selected
 - 按 `a` 才会等价执行“保存 selected + apply 到 symlink”
 - 等价 CLI 流程：`tbmux select ...` + `tbmux select apply`
 - 若有未 apply 变更，`q` 会先提示，再次 `q` 才退出并丢弃草稿

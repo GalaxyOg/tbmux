@@ -27,6 +27,7 @@
 ## TUI 设计（v0.2）
 
 - 框架：Bubble Tea（事件驱动，键盘交互稳定，后续可扩展实时刷新）
+- 入口：交互终端直接执行 `tbmux` 默认进入 TUI，CLI 子命令继续保留为底层接口
 - 命令：`tbmux tui [--today|--hours|--days|--running|--not-running|--under|--match]`
 - 模型分层：
   - discovered runs：扫描全集（state）
@@ -36,6 +37,7 @@
 - 交互键位：
   - `j/k`、方向键：移动
   - `space`：切换 selected
+  - `x`：一键清空 draft selected
   - `/`：搜索
   - `r`：running 筛选轮换
   - `t`：today 开关
@@ -44,3 +46,6 @@
   - `a`：apply
   - `q`：退出（dirty 时二次确认）
   - `?`：帮助
+- 视图策略：
+  - 长列表支持光标跟随滚动（viewport）
+  - 终端宽度不足时自动退化为单栏，避免右侧 pane 挤压错位

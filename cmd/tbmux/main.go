@@ -22,7 +22,7 @@ import (
 	"tbmux/internal/tui"
 )
 
-var version = "v0.2.0-dev"
+var version = "v0.2.1-dev"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -36,14 +36,25 @@ func run(args []string) int {
 		return 2
 	}
 	rest := fs.Args()
-	if len(rest) == 0 {
-		printRootUsage()
-		return 0
-	}
 	configPath, err := app.ResolveConfigPath(*cfgPathFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
+	}
+	if len(rest) == 0 {
+		if isInteractiveTerminal() {
+			if _, err := os.Stat(configPath); err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					fmt.Fprintf(os.Stderr, "未找到配置文件: %s\\n先运行: tbmux init\\n", configPath)
+					return 1
+				}
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			return cmdTUI(configPath, nil)
+		}
+		printRootUsage()
+		return 0
 	}
 
 	cmd := rest[0]
@@ -97,6 +108,7 @@ func printRootUsage() {
 	fmt.Print(`tbmux - TensorBoard 多目录聚合管理 CLI
 
 用法:
+  tbmux [--config PATH]                 # 交互终端下默认进入 TUI
   tbmux [--config PATH] <command> [args]
 
 核心命令:
@@ -109,7 +121,7 @@ func printRootUsage() {
   select clear|add|remove|by-filter|apply
   start|stop|restart|status
   doctor [--json]
-	tailscale status|serve
+  tailscale status|serve
   config path|example
 `)
 }
@@ -603,6 +615,18 @@ func parseTUIFilterArgs(args []string) (model.Filter, error) {
 		Under:       *under,
 		Match:       *match,
 	}, nil
+}
+
+func isInteractiveTerminal() bool {
+	in, inErr := os.Stdin.Stat()
+	out, outErr := os.Stdout.Stat()
+	if inErr != nil || outErr != nil {
+		return false
+	}
+	if os.Getenv("TERM") == "dumb" {
+		return false
+	}
+	return (in.Mode()&os.ModeCharDevice) != 0 && (out.Mode()&os.ModeCharDevice) != 0
 }
 
 func printAccessHints(cfg config.Config) {

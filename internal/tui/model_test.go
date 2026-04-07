@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -34,6 +35,19 @@ func TestToggleSelectionMakesDirty(t *testing.T) {
 	}
 	if _, ok := m2.draftSelected["r1"]; !ok {
 		t.Fatalf("expected r1 selected")
+	}
+}
+
+func TestClearAllDraftSelected(t *testing.T) {
+	m := testModel()
+	m.draftSelected["r1"] = model.SelectionEntry{Source: "test", SelectedAt: time.Now().UTC()}
+	out, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m2 := out.(Model)
+	if len(m2.draftSelected) != 0 {
+		t.Fatalf("expected draft selected cleared")
+	}
+	if !m2.dirty {
+		t.Fatalf("expected dirty after clear")
 	}
 }
 
@@ -96,5 +110,34 @@ func TestApplyCmdPersistsSelectionAndSymlink(t *testing.T) {
 	link := filepath.Join(cfg.Managed.RunDir, "selected", "run_one")
 	if _, err := os.Readlink(link); err != nil {
 		t.Fatalf("expected symlink at %s: %v", link, err)
+	}
+}
+
+func TestCursorScrollFollow(t *testing.T) {
+	now := time.Now().UTC()
+	discovered := make([]model.RunRecord, 0, 80)
+	for i := 0; i < 80; i++ {
+		discovered = append(discovered, model.RunRecord{
+			ID:            fmt.Sprintf("r%02d", i),
+			Name:          fmt.Sprintf("run_%02d", i),
+			SourcePath:    fmt.Sprintf("/tmp/run/%02d", i),
+			WatchRoot:     "/tmp",
+			LastUpdatedAt: now,
+			IsRunning:     i%2 == 0,
+		})
+	}
+	m := New("/tmp/config.toml", config.Config{}, model.State{
+		Version:    1,
+		Discovered: discovered,
+		Selected:   map[string]model.SelectionEntry{},
+	}, model.Filter{})
+	out, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 14})
+	m2 := out.(Model)
+	for i := 0; i < 40; i++ {
+		out, _ = m2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		m2 = out.(Model)
+	}
+	if m2.listTop == 0 {
+		t.Fatalf("expected listTop > 0 when cursor moves out of view")
 	}
 }

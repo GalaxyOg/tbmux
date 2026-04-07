@@ -28,14 +28,19 @@ type Model struct {
 
 	cursor          int
 	indices         []int
+	listTop         int
 	searchMode      bool
 	searchInput     string
 	helpVisible     bool
 	exitConfirmMode bool
 
-	statusMsg string
-	lastErr   error
-	quitting  bool
+	width  int
+	height int
+
+	statusMsg   string
+	statusLevel string
+	lastErr     error
+	quitting    bool
 }
 
 type appliedMsg struct {
@@ -49,6 +54,18 @@ type syncedMsg struct {
 	err error
 }
 
+var (
+	styleTitle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("45"))
+	styleMeta   = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	styleInfo   = lipgloss.NewStyle().Foreground(lipgloss.Color("117"))
+	styleWarn   = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
+	styleErr    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	styleOK     = lipgloss.NewStyle().Foreground(lipgloss.Color("84"))
+	styleFaint  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	styleCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
+	stylePane   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63")).Padding(0, 1)
+)
+
 func New(cfgPath string, cfg config.Config, st model.State, f model.Filter) Model {
 	draft := make(map[string]model.SelectionEntry, len(st.Selected))
 	for k, v := range st.Selected {
@@ -60,11 +77,13 @@ func New(cfgPath string, cfg config.Config, st model.State, f model.Filter) Mode
 		st:              st,
 		filter:          f,
 		draftSelected:   draft,
-		indices:         nil,
 		helpVisible:     true,
-		statusMsg:       "就绪: j/k移动, space切换, /搜索, a应用, q退出",
+		statusMsg:       "就绪: j/k移动, space切换, x清空已选, /搜索, a应用, q退出",
+		statusLevel:     "info",
 		searchMode:      false,
 		exitConfirmMode: false,
+		width:           120,
+		height:          32,
 	}
 	m.rebuildIndices()
 	return m
@@ -83,23 +102,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.lastErr = msg.err
 			m.statusMsg = "apply 失败: " + msg.err.Error()
+			m.statusLevel = "error"
 			return m, nil
 		}
 		m.dirty = false
 		m.statusMsg = fmt.Sprintf("apply 成功: symlink=%d", msg.applied)
+		m.statusLevel = "ok"
 		return m, nil
 	case syncedMsg:
 		if msg.err != nil {
 			m.lastErr = msg.err
 			m.statusMsg = "sync 失败: " + msg.err.Error()
+			m.statusLevel = "error"
 			return m, nil
 		}
 		m.st = msg.st
 		pruneUnknownSelected(&m.draftSelected, m.st)
 		m.rebuildIndices()
 		m.statusMsg = msg.msg
+		m.statusLevel = "ok"
 		return m, nil
 	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.ensureCursorVisible()
 		return m, nil
 	default:
 		return m, nil
@@ -107,18 +133,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	s := msg.String()
-	switch s {
+	switch msg.String() {
 	case "enter":
 		m.search = strings.TrimSpace(m.searchInput)
 		m.filter.Match = m.search
 		m.searchMode = false
 		m.rebuildIndices()
 		m.statusMsg = "搜索已应用"
+		m.statusLevel = "ok"
 		return m, nil
 	case "esc":
 		m.searchMode = false
 		m.statusMsg = "取消搜索输入"
+		m.statusLevel = "info"
 		return m, nil
 	case "backspace":
 		if len(m.searchInput) > 0 {
@@ -126,6 +153,7 @@ func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	default:
+		s := msg.String()
 		if len(s) == 1 {
 			m.searchInput += s
 		}
@@ -139,6 +167,7 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.dirty && !m.exitConfirmMode {
 			m.exitConfirmMode = true
 			m.statusMsg = "有未 apply 变更，再按 q 放弃并退出"
+			m.statusLevel = "warn"
 			return m, nil
 		}
 		m.quitting = true
@@ -150,22 +179,29 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursor < len(m.indices)-1 {
 			m.cursor++
 		}
+		m.ensureCursorVisible()
 		m.exitConfirmMode = false
 		return m, nil
 	case "up", "k":
 		if m.cursor > 0 {
 			m.cursor--
 		}
+		m.ensureCursorVisible()
 		m.exitConfirmMode = false
 		return m, nil
 	case " ":
 		m.toggleCurrent()
 		m.exitConfirmMode = false
 		return m, nil
+	case "x":
+		m.clearAllDraftSelected()
+		m.exitConfirmMode = false
+		return m, nil
 	case "/":
 		m.searchMode = true
 		m.searchInput = m.search
 		m.statusMsg = "输入搜索关键词，回车应用"
+		m.statusLevel = "info"
 		m.exitConfirmMode = false
 		return m, nil
 	case "c":
@@ -174,6 +210,7 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.searchInput = ""
 		m.rebuildIndices()
 		m.statusMsg = "已清空筛选"
+		m.statusLevel = "ok"
 		m.exitConfirmMode = false
 		return m, nil
 	case "r":
@@ -185,6 +222,7 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filter.Today = !m.filter.Today
 		m.rebuildIndices()
 		m.statusMsg = "today 筛选已切换"
+		m.statusLevel = "ok"
 		m.exitConfirmMode = false
 		return m, nil
 	case "a":
@@ -203,36 +241,69 @@ func (m Model) View() string {
 		return "已退出 tbmux tui\n"
 	}
 
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("33")).Render("tbmux tui")
-	left := m.renderListPane(80)
-	right := m.renderDetailPane(80)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, left, "\n", right)
+	narrow := m.width > 0 && m.width < 110
+	leftWidth := m.width - 2
+	rightWidth := 0
+	if leftWidth <= 0 {
+		leftWidth = 80
+	}
+	if !narrow {
+		leftWidth = int(float64(m.width) * 0.62)
+		if leftWidth < 62 {
+			leftWidth = 62
+		}
+		rightWidth = m.width - leftWidth - 3
+		if rightWidth < 40 {
+			rightWidth = 40
+			leftWidth = m.width - rightWidth - 3
+		}
+	}
 
-	footer := m.statusMsg
-	if m.lastErr != nil {
-		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(footer)
+	title := styleTitle.Render("tbmux tui")
+	meta := styleMeta.Render(fmt.Sprintf("config=%s | discovered=%d | selected(draft)=%d | dirty=%t", m.cfgPath, len(m.st.Discovered), len(m.draftSelected), m.dirty))
+	filterLine := styleMeta.Render("filter=" + filterSummary(m.filter))
+
+	body := m.renderListPane(leftWidth)
+	if !narrow {
+		body = lipgloss.JoinHorizontal(lipgloss.Top, body, " ", m.renderDetailPane(rightWidth))
 	}
 
 	var lines []string
-	lines = append(lines, title)
-	lines = append(lines, fmt.Sprintf("config=%s | discovered=%d | selected(draft)=%d | dirty=%t", m.cfgPath, len(m.st.Discovered), len(m.draftSelected), m.dirty))
-	lines = append(lines, fmt.Sprintf("filter=%s", filterSummary(m.filter)))
+	lines = append(lines, title, meta, filterLine)
 	if m.searchMode {
-		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Render("search> "+m.searchInput))
+		lines = append(lines, styleInfo.Render("search> "+m.searchInput))
 	}
 	lines = append(lines, body)
+	if narrow {
+		if run, ok := m.currentRun(); ok {
+			lines = append(lines, styleFaint.Render("current: "+run.Name+" | "+run.SourcePath))
+		}
+	}
 	if m.helpVisible {
 		lines = append(lines, helpText())
 	}
-	lines = append(lines, footer)
-
+	lines = append(lines, m.renderStatus())
 	return strings.Join(lines, "\n") + "\n"
+}
+
+func (m Model) renderStatus() string {
+	switch m.statusLevel {
+	case "ok":
+		return styleOK.Render(m.statusMsg)
+	case "warn":
+		return styleWarn.Render(m.statusMsg)
+	case "error":
+		return styleErr.Render(m.statusMsg)
+	default:
+		return styleInfo.Render(m.statusMsg)
+	}
 }
 
 func (m *Model) toggleCurrent() {
 	run, ok := m.currentRun()
 	if !ok {
 		m.statusMsg = "当前无可操作条目"
+		m.statusLevel = "warn"
 		return
 	}
 	if _, exists := m.draftSelected[run.ID]; exists {
@@ -243,6 +314,19 @@ func (m *Model) toggleCurrent() {
 		m.statusMsg = "已选择: " + run.Name
 	}
 	m.dirty = true
+	m.statusLevel = "ok"
+}
+
+func (m *Model) clearAllDraftSelected() {
+	if len(m.draftSelected) == 0 {
+		m.statusMsg = "draft selected 已为空"
+		m.statusLevel = "info"
+		return
+	}
+	m.draftSelected = map[string]model.SelectionEntry{}
+	m.dirty = true
+	m.statusMsg = "已清空全部 draft selected（按 a 应用）"
+	m.statusLevel = "ok"
 }
 
 func (m *Model) toggleRunningFilter() {
@@ -250,16 +334,19 @@ func (m *Model) toggleRunningFilter() {
 		v := true
 		m.filter.RunningOnly = &v
 		m.statusMsg = "running 筛选: only running"
+		m.statusLevel = "ok"
 		return
 	}
 	if *m.filter.RunningOnly {
 		v := false
 		m.filter.RunningOnly = &v
 		m.statusMsg = "running 筛选: only not-running"
+		m.statusLevel = "ok"
 		return
 	}
 	m.filter.RunningOnly = nil
 	m.statusMsg = "running 筛选: all"
+	m.statusLevel = "ok"
 }
 
 func (m *Model) rebuildIndices() {
@@ -278,11 +365,54 @@ func (m *Model) rebuildIndices() {
 	m.indices = idx
 	if len(m.indices) == 0 {
 		m.cursor = 0
+		m.listTop = 0
 		return
 	}
 	if m.cursor >= len(m.indices) {
 		m.cursor = len(m.indices) - 1
 	}
+	m.ensureCursorVisible()
+}
+
+func (m *Model) ensureCursorVisible() {
+	visibleRows := m.listRowsCapacity()
+	if visibleRows < 1 {
+		visibleRows = 1
+	}
+	if m.cursor < m.listTop {
+		m.listTop = m.cursor
+	}
+	if m.cursor >= m.listTop+visibleRows {
+		m.listTop = m.cursor - visibleRows + 1
+	}
+	if m.listTop < 0 {
+		m.listTop = 0
+	}
+	maxTop := len(m.indices) - visibleRows
+	if maxTop < 0 {
+		maxTop = 0
+	}
+	if m.listTop > maxTop {
+		m.listTop = maxTop
+	}
+}
+
+func (m Model) listRowsCapacity() int {
+	if m.height <= 0 {
+		return 16
+	}
+	base := 8 // 标题/状态/帮助等
+	if m.searchMode {
+		base++
+	}
+	if m.helpVisible {
+		base++
+	}
+	rows := m.height - base
+	if rows < 6 {
+		rows = 6
+	}
+	return rows
 }
 
 func (m Model) currentRun() (model.RunRecord, bool) {
@@ -293,49 +423,59 @@ func (m Model) currentRun() (model.RunRecord, bool) {
 }
 
 func (m Model) renderListPane(width int) string {
-	header := lipgloss.NewStyle().Bold(true).Render("Discovered")
+	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("111")).Render("Discovered")
 	lines := []string{header}
 	if len(m.indices) == 0 {
-		lines = append(lines, "(no runs matched)")
-		return strings.Join(lines, "\n")
+		lines = append(lines, styleFaint.Render("(no runs matched)"))
+		return stylePane.Width(width).Render(strings.Join(lines, "\n"))
 	}
-	for i, idx := range m.indices {
-		r := m.st.Discovered[idx]
+	cap := m.listRowsCapacity()
+	start := m.listTop
+	if start < 0 {
+		start = 0
+	}
+	end := start + cap
+	if end > len(m.indices) {
+		end = len(m.indices)
+	}
+	for i := start; i < end; i++ {
+		r := m.st.Discovered[m.indices[i]]
 		cursor := " "
 		if i == m.cursor {
-			cursor = ">"
+			cursor = styleCursor.Render(">")
 		}
-		sel := "[ ]"
+		sel := styleFaint.Render("[ ]")
 		if _, ok := m.draftSelected[r.ID]; ok {
-			sel = "[x]"
+			sel = styleOK.Render("[x]")
 		}
-		running := "idle"
+		runState := styleFaint.Render("IDLE")
 		if r.IsRunning {
-			running = "run"
+			runState = styleOK.Render("RUN")
 		}
-		line := fmt.Sprintf("%s %s %-20s %-4s %s", cursor, sel, trim(r.Name, 20), running, r.LastUpdatedAt.Format("01-02 15:04"))
+		leftText := fmt.Sprintf("%s | %s", r.Name, shortPath(r.SourcePath, 3))
+		line := fmt.Sprintf("%s %s %-4s %s", cursor, sel, runState, trim(leftText, max(20, width-18)))
 		if i == m.cursor {
-			line = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Render(line)
+			line = styleCursor.Render(line)
 		}
 		lines = append(lines, line)
-		if len(lines) >= 25 {
-			break
-		}
 	}
-	return lipgloss.NewStyle().Width(width).Border(lipgloss.RoundedBorder()).Padding(0, 1).Render(strings.Join(lines, "\n"))
+	if end < len(m.indices) {
+		lines = append(lines, styleFaint.Render(fmt.Sprintf("... %d more", len(m.indices)-end)))
+	}
+	return stylePane.Width(width).Render(strings.Join(lines, "\n"))
 }
 
 func (m Model) renderDetailPane(width int) string {
-	header := lipgloss.NewStyle().Bold(true).Render("Detail")
+	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("141")).Render("Detail")
 	lines := []string{header}
 	r, ok := m.currentRun()
 	if !ok {
-		lines = append(lines, "(none)")
-		return lipgloss.NewStyle().Width(width).Border(lipgloss.RoundedBorder()).Padding(0, 1).Render(strings.Join(lines, "\n"))
+		lines = append(lines, styleFaint.Render("(none)"))
+		return stylePane.Width(width).Render(strings.Join(lines, "\n"))
 	}
-	selState := "no"
+	selState := styleWarn.Render("no")
 	if _, ok := m.draftSelected[r.ID]; ok {
-		selState = "yes"
+		selState = styleOK.Render("yes")
 	}
 	lines = append(lines,
 		"id: "+r.ID,
@@ -346,7 +486,7 @@ func (m Model) renderDetailPane(width int) string {
 		"watch_root: "+r.WatchRoot,
 		"source: "+r.SourcePath,
 	)
-	return lipgloss.NewStyle().Width(width).Border(lipgloss.RoundedBorder()).Padding(0, 1).Render(strings.Join(lines, "\n"))
+	return stylePane.Width(width).Render(strings.Join(lines, "\n"))
 }
 
 func (m Model) applyCmd() tea.Cmd {
@@ -389,9 +529,7 @@ func pruneUnknownSelected(sel *map[string]model.SelectionEntry, st model.State) 
 }
 
 func helpText() string {
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(
-		"keys: j/k or ↑/↓ move | space toggle | / search | r running | t today | c clear filter | s sync | a apply | ? help | q quit",
-	)
+	return styleFaint.Render("keys: j/k or ↑/↓ move | space toggle | x clear selected | / search | r running | t today | c clear filter | s sync | a apply | ? help | q quit")
 }
 
 func filterSummary(f model.Filter) string {
@@ -425,14 +563,32 @@ func filterSummary(f model.Filter) string {
 }
 
 func trim(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
 	if len(s) <= n {
 		return s
-	}
-	if n <= 1 {
-		return s[:n]
 	}
 	if n <= 3 {
 		return s[:n]
 	}
 	return s[:n-3] + "..."
+}
+
+func shortPath(path string, depth int) string {
+	if path == "" {
+		return path
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) <= depth {
+		return path
+	}
+	return ".../" + strings.Join(parts[len(parts)-depth:], "/")
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
