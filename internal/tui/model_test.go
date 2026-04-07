@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,5 +140,43 @@ func TestCursorScrollFollow(t *testing.T) {
 	}
 	if m2.listTop == 0 {
 		t.Fatalf("expected listTop > 0 when cursor moves out of view")
+	}
+}
+
+func TestViewAlwaysDualPane(t *testing.T) {
+	m := testModel()
+	out, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m2 := out.(Model)
+	view := m2.View()
+	if !strings.Contains(view, "Discovered") || !strings.Contains(view, "Detail") {
+		t.Fatalf("expected both panes in view, got: %s", view)
+	}
+}
+
+func TestHorizontalNameScroll(t *testing.T) {
+	now := time.Now().UTC()
+	m := New("/tmp/config.toml", config.Config{}, model.State{
+		Version: 1,
+		Discovered: []model.RunRecord{
+			{
+				ID:            "r-long",
+				Name:          "very_very_very_long_training_run_name_for_scroll_test",
+				SourcePath:    "/tmp/r-long",
+				WatchRoot:     "/tmp",
+				LastUpdatedAt: now,
+				IsRunning:     true,
+			},
+		},
+		Selected: map[string]model.SelectionEntry{},
+	}, model.Filter{})
+	out, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 20})
+	m2 := out.(Model)
+	if m2.nameOffset != 0 {
+		t.Fatalf("expected initial offset to be 0")
+	}
+	out, _ = m2.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m3 := out.(Model)
+	if m3.nameOffset <= 0 {
+		t.Fatalf("expected name offset > 0 after right key")
 	}
 }

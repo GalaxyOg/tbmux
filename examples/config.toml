@@ -27,3 +27,4 @@ running_window_minutes = 15
 [tailscale]
 binary = ""
 serve_url = "http://127.0.0.1:6006"
+auto_serve = true

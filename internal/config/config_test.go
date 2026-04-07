@@ -16,6 +16,9 @@ func TestWriteDefaultAndLoad(t *testing.T) {
 	if cfg.TensorBoard.Port != 6006 {
 		t.Fatalf("unexpected default port: %d", cfg.TensorBoard.Port)
 	}
+	if !cfg.Tailscale.AutoServe {
+		t.Fatalf("expected tailscale.auto_serve default to true")
+	}
 	loaded, err := Load(configPath)
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)

@@ -44,8 +44,9 @@ type Scan struct {
 }
 
 type Tailscale struct {
-	Binary   string `toml:"binary"`
-	ServeURL string `toml:"serve_url"`
+	Binary    string `toml:"binary"`
+	ServeURL  string `toml:"serve_url"`
+	AutoServe bool   `toml:"auto_serve"`
 }
 
 func DefaultConfigPath() (string, error) {
@@ -105,8 +106,9 @@ func Default() (Config, error) {
 			RunningWindowMinutes: 15,
 		},
 		Tailscale: Tailscale{
-			Binary:   "",
-			ServeURL: "http://127.0.0.1:6006",
+			Binary:    "",
+			ServeURL:  "http://127.0.0.1:6006",
+			AutoServe: true,
 		},
 	}, nil
 }

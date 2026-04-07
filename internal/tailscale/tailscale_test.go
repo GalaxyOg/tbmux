@@ -4,7 +4,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func makeExec(t *testing.T, path string) {
@@ -126,5 +128,82 @@ func TestParseServeURL(t *testing.T) {
 	u := ParseServeURL(out)
 	if u != "https://drlserver.tailb5bd65.ts.net" {
 		t.Fatalf("unexpected url: %s", u)
+	}
+}
+
+func TestServeOffCommand(t *testing.T) {
+	cmd := ServeOffCommand("/usr/bin/tailscale")
+	joined := strings.Join(cmd, " ")
+	if joined != "/usr/bin/tailscale serve --https=443 off" {
+		t.Fatalf("unexpected off command: %s", joined)
+	}
+}
+
+func TestRunServeTimeoutButServeAvailable(t *testing.T) {
+	tmp := t.TempDir()
+	bin := filepath.Join(tmp, "tailscale")
+	script := `#!/bin/sh
+if [ "$1" = "serve" ] && [ "$2" = "status" ]; then
+  echo "https://demo.tail.ts.net (tailnet only)"
+  echo "|-- / proxy http://127.0.0.1:6786"
+  exit 0
+fi
+if [ "$1" = "serve" ] && [ "$2" = "--bg" ]; then
+  sleep 1
+  echo "Serve started and running in the background."
+  exit 0
+fi
+exit 1
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldServeTimeout := serveTimeout
+	oldStatusTimeout := statusTimeout
+	defer func() {
+		serveTimeout = oldServeTimeout
+		statusTimeout = oldStatusTimeout
+	}()
+	serveTimeout = 50 * time.Millisecond
+	statusTimeout = 300 * time.Millisecond
+
+	out, err := RunServe(bin, "http://127.0.0.1:6786")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if !strings.Contains(out, "tailnet 入口") {
+		t.Fatalf("expected timeout recovery hint in output, got: %s", out)
+	}
+}
+
+func TestRunServeTimeoutAndUnavailable(t *testing.T) {
+	tmp := t.TempDir()
+	bin := filepath.Join(tmp, "tailscale")
+	script := `#!/bin/sh
+if [ "$1" = "serve" ] && [ "$2" = "status" ]; then
+  echo "No serve config"
+  exit 0
+fi
+if [ "$1" = "serve" ] && [ "$2" = "--bg" ]; then
+  sleep 1
+  exit 0
+fi
+exit 1
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldServeTimeout := serveTimeout
+	oldStatusTimeout := statusTimeout
+	defer func() {
+		serveTimeout = oldServeTimeout
+		statusTimeout = oldStatusTimeout
+	}()
+	serveTimeout = 50 * time.Millisecond
+	statusTimeout = 300 * time.Millisecond
+
+	_, err := RunServe(bin, "http://127.0.0.1:6786")
+	if err == nil {
+		t.Fatalf("expected error when timeout and no tailnet url")
 	}
 }

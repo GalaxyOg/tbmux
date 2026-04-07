@@ -174,6 +174,11 @@ tbmux tailscale serve --dry-run
 tbmux tailscale serve
 ```
 
+说明：
+
+- `tbmux tailscale serve` 带超时保护，避免异常情况下长时间卡住
+- 如果命令超时但 `serve status` 已显示 tailnet 入口，`tbmux` 会按成功处理并给出地址提示
+
 ## 关键命令
 
 - `tbmux`（交互终端中默认进入 TUI）
@@ -210,6 +215,7 @@ tbmux tui
 快捷键：
 
 - `j/k` 或方向键：上下移动
+- `←/→`：左栏中对当前长名称做水平滚动查看
 - `space`：切换当前项 selected
 - `x`：清空全部 draft selected
 - `/`：搜索
@@ -218,6 +224,8 @@ tbmux tui
 - `c`：清空筛选
 - `s`：sync discovered
 - `a`：apply
+- `g`：手动开启/关闭 tailscale serve
+- `m`：切换 `tailscale.auto_serve`（会写回配置文件）
 - `q`：退出（dirty 时二次确认）
 - `?`：帮助
 
@@ -227,9 +235,11 @@ tbmux tui
 - 查看过滤后的 discovered runs
 - 查看当前 selected（正在展示集合）
 - 光标滚动跟随（长列表下移时窗口自动跟随）
+- 始终双栏（左列表 + 右详情）
+- 左栏长名称可用左右键查看完整内容
 - 一键清空全部 draft selected（`x`）
 - apply selected 到 symlink 暴露目录（`a`）
-- 窄终端下自动切换为单栏布局
+- 右栏显示 TensorBoard/Tailscale 状态与 tailnet 地址
 
 TUI 与 CLI 的关系：
 
@@ -252,6 +262,7 @@ TUI 与 CLI 的关系：
 - `scan.running_window_minutes`: running 推断窗口
 - `tailscale.binary`: 手动覆盖二进制路径
 - `tailscale.serve_url`: `tailscale serve` 目标 URL
+- `tailscale.auto_serve`: TUI 启动时自动确保 `tailscale serve` 可用（默认 `true`）
 
 示例见 [examples/config.toml](/mnt/share/YH/openclaw-workspace/tbmux/examples/config.toml)。
 

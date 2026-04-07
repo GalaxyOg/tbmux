@@ -12,7 +12,9 @@ import (
 	"tbmux/internal/app"
 	"tbmux/internal/config"
 	"tbmux/internal/model"
+	"tbmux/internal/process"
 	"tbmux/internal/selection"
+	"tbmux/internal/tailscale"
 )
 
 type Model struct {
@@ -33,9 +35,22 @@ type Model struct {
 	searchInput     string
 	helpVisible     bool
 	exitConfirmMode bool
+	nameOffset      int
 
 	width  int
 	height int
+
+	tbRunning bool
+	tbPID     int
+	tbErr     error
+
+	tailscaleDetected bool
+	tailscaleBinary   string
+	tailscaleMethod   string
+	tailscaleServeOn  bool
+	tailscaleURL      string
+	tailscaleErr      error
+	tailscaleBusy     bool
 
 	statusMsg   string
 	statusLevel string
@@ -54,16 +69,45 @@ type syncedMsg struct {
 	err error
 }
 
+type processStatusMsg struct {
+	running bool
+	pid     int
+	err     error
+}
+
+type tailscaleStatusMsg struct {
+	detected bool
+	binary   string
+	method   string
+	serveOn  bool
+	url      string
+	note     string
+	err      error
+}
+
+type tailscaleActionMsg struct {
+	enable bool
+	out    string
+	err    error
+}
+
+type autoServeSavedMsg struct {
+	auto bool
+	err  error
+}
+
 var (
-	styleTitle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("45"))
-	styleMeta   = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	styleInfo   = lipgloss.NewStyle().Foreground(lipgloss.Color("117"))
-	styleWarn   = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
-	styleErr    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	styleOK     = lipgloss.NewStyle().Foreground(lipgloss.Color("84"))
-	styleFaint  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	styleCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
-	stylePane   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63")).Padding(0, 1)
+	styleTitle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
+	styleMeta  = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	styleInfo  = lipgloss.NewStyle().Foreground(lipgloss.Color("111"))
+	styleWarn  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	styleErr   = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
+	styleOK    = lipgloss.NewStyle().Foreground(lipgloss.Color("78")).Bold(true)
+	styleFaint = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+
+	styleCursor    = lipgloss.NewStyle().Foreground(lipgloss.Color("51")).Bold(true)
+	styleRowActive = lipgloss.NewStyle().Foreground(lipgloss.Color("229")).Background(lipgloss.Color("24"))
+	stylePane      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("67")).Padding(0, 1)
 )
 
 func New(cfgPath string, cfg config.Config, st model.State, f model.Filter) Model {
@@ -78,7 +122,7 @@ func New(cfgPath string, cfg config.Config, st model.State, f model.Filter) Mode
 		filter:          f,
 		draftSelected:   draft,
 		helpVisible:     true,
-		statusMsg:       "就绪: j/k移动, space切换, x清空已选, /搜索, a应用, q退出",
+		statusMsg:       "就绪: j/k移动, ←/→查看长名称, space切换, g tailscale开关, m 自动开关, a应用",
 		statusLevel:     "info",
 		searchMode:      false,
 		exitConfirmMode: false,
@@ -89,7 +133,9 @@ func New(cfgPath string, cfg config.Config, st model.State, f model.Filter) Mode
 	return m
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd {
+	return tea.Batch(m.refreshProcessCmd(), m.refreshTailscaleCmd(true))
+}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -108,7 +154,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.dirty = false
 		m.statusMsg = fmt.Sprintf("apply 成功: symlink=%d", msg.applied)
 		m.statusLevel = "ok"
-		return m, nil
+		return m, tea.Batch(m.refreshProcessCmd(), m.refreshTailscaleCmd(m.cfg.Tailscale.AutoServe))
 	case syncedMsg:
 		if msg.err != nil {
 			m.lastErr = msg.err
@@ -121,11 +167,72 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rebuildIndices()
 		m.statusMsg = msg.msg
 		m.statusLevel = "ok"
+		return m, tea.Batch(m.refreshProcessCmd(), m.refreshTailscaleCmd(m.cfg.Tailscale.AutoServe))
+	case processStatusMsg:
+		m.tbRunning = msg.running
+		m.tbPID = msg.pid
+		m.tbErr = msg.err
+		if msg.err != nil {
+			m.lastErr = msg.err
+		}
+		return m, nil
+	case tailscaleStatusMsg:
+		m.tailscaleDetected = msg.detected
+		m.tailscaleBinary = msg.binary
+		m.tailscaleMethod = msg.method
+		m.tailscaleServeOn = msg.serveOn
+		m.tailscaleURL = msg.url
+		m.tailscaleErr = msg.err
+		m.tailscaleBusy = false
+		if msg.err != nil {
+			m.lastErr = msg.err
+			m.statusMsg = "tailscale: " + msg.err.Error()
+			m.statusLevel = "warn"
+			return m, nil
+		}
+		if strings.TrimSpace(msg.note) != "" {
+			m.statusMsg = "tailscale: " + msg.note
+			m.statusLevel = "ok"
+		}
+		return m, nil
+	case tailscaleActionMsg:
+		m.tailscaleBusy = false
+		if msg.err != nil {
+			m.lastErr = msg.err
+			m.statusMsg = "tailscale 操作失败: " + msg.err.Error()
+			m.statusLevel = "error"
+			return m, m.refreshTailscaleCmd(false)
+		}
+		if msg.enable {
+			m.statusMsg = "tailscale serve 已请求开启"
+		} else {
+			m.statusMsg = "tailscale serve 已请求关闭"
+		}
+		if strings.TrimSpace(msg.out) != "" {
+			m.statusMsg += " | " + firstLine(msg.out)
+		}
+		m.statusLevel = "ok"
+		return m, m.refreshTailscaleCmd(false)
+	case autoServeSavedMsg:
+		if msg.err != nil {
+			m.lastErr = msg.err
+			m.statusMsg = "保存 auto_serve 失败: " + msg.err.Error()
+			m.statusLevel = "error"
+			return m, nil
+		}
+		if msg.auto {
+			m.statusMsg = "tailscale.auto_serve 已开启"
+			m.statusLevel = "ok"
+			return m, m.refreshTailscaleCmd(true)
+		}
+		m.statusMsg = "tailscale.auto_serve 已关闭"
+		m.statusLevel = "warn"
 		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		m.ensureCursorVisible()
+		m.clampNameOffset()
 		return m, nil
 	default:
 		return m, nil
@@ -179,6 +286,7 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursor < len(m.indices)-1 {
 			m.cursor++
 		}
+		m.nameOffset = 0
 		m.ensureCursorVisible()
 		m.exitConfirmMode = false
 		return m, nil
@@ -186,7 +294,16 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursor > 0 {
 			m.cursor--
 		}
+		m.nameOffset = 0
 		m.ensureCursorVisible()
+		m.exitConfirmMode = false
+		return m, nil
+	case "left":
+		m.shiftNameOffset(-8)
+		m.exitConfirmMode = false
+		return m, nil
+	case "right":
+		m.shiftNameOffset(8)
 		m.exitConfirmMode = false
 		return m, nil
 	case " ":
@@ -231,6 +348,21 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "s":
 		m.exitConfirmMode = false
 		return m, m.syncCmd()
+	case "g":
+		if m.tailscaleBusy {
+			m.statusMsg = "tailscale 操作进行中"
+			m.statusLevel = "warn"
+			return m, nil
+		}
+		m.tailscaleBusy = true
+		m.statusMsg = "正在执行 tailscale serve 切换..."
+		m.statusLevel = "info"
+		m.exitConfirmMode = false
+		return m, m.tailscaleToggleCmd(!m.tailscaleServeOn)
+	case "m":
+		m.cfg.Tailscale.AutoServe = !m.cfg.Tailscale.AutoServe
+		m.exitConfirmMode = false
+		return m, m.saveAutoServeCmd(m.cfg.Tailscale.AutoServe)
 	default:
 		return m, nil
 	}
@@ -241,32 +373,12 @@ func (m Model) View() string {
 		return "已退出 tbmux tui\n"
 	}
 
-	narrow := m.width > 0 && m.width < 110
-	leftWidth := m.width - 2
-	rightWidth := 0
-	if leftWidth <= 0 {
-		leftWidth = 80
-	}
-	if !narrow {
-		leftWidth = int(float64(m.width) * 0.62)
-		if leftWidth < 62 {
-			leftWidth = 62
-		}
-		rightWidth = m.width - leftWidth - 3
-		if rightWidth < 40 {
-			rightWidth = 40
-			leftWidth = m.width - rightWidth - 3
-		}
-	}
-
+	leftWidth, rightWidth := m.paneWidths()
 	title := styleTitle.Render("tbmux tui")
 	meta := styleMeta.Render(fmt.Sprintf("config=%s | discovered=%d | selected(draft)=%d | dirty=%t", m.cfgPath, len(m.st.Discovered), len(m.draftSelected), m.dirty))
 	filterLine := styleMeta.Render("filter=" + filterSummary(m.filter))
 
-	body := m.renderListPane(leftWidth)
-	if !narrow {
-		body = lipgloss.JoinHorizontal(lipgloss.Top, body, " ", m.renderDetailPane(rightWidth))
-	}
+	body := lipgloss.JoinHorizontal(lipgloss.Top, m.renderListPane(leftWidth), " ", m.renderDetailPane(rightWidth))
 
 	var lines []string
 	lines = append(lines, title, meta, filterLine)
@@ -274,11 +386,6 @@ func (m Model) View() string {
 		lines = append(lines, styleInfo.Render("search> "+m.searchInput))
 	}
 	lines = append(lines, body)
-	if narrow {
-		if run, ok := m.currentRun(); ok {
-			lines = append(lines, styleFaint.Render("current: "+run.Name+" | "+run.SourcePath))
-		}
-	}
 	if m.helpVisible {
 		lines = append(lines, helpText())
 	}
@@ -287,15 +394,20 @@ func (m Model) View() string {
 }
 
 func (m Model) renderStatus() string {
+	extra := ""
+	if m.tailscaleBusy {
+		extra = " [tailscale busy]"
+	}
+	msg := m.statusMsg + extra
 	switch m.statusLevel {
 	case "ok":
-		return styleOK.Render(m.statusMsg)
+		return styleOK.Render(msg)
 	case "warn":
-		return styleWarn.Render(m.statusMsg)
+		return styleWarn.Render(msg)
 	case "error":
-		return styleErr.Render(m.statusMsg)
+		return styleErr.Render(msg)
 	default:
-		return styleInfo.Render(m.statusMsg)
+		return styleInfo.Render(msg)
 	}
 }
 
@@ -366,11 +478,13 @@ func (m *Model) rebuildIndices() {
 	if len(m.indices) == 0 {
 		m.cursor = 0
 		m.listTop = 0
+		m.nameOffset = 0
 		return
 	}
 	if m.cursor >= len(m.indices) {
 		m.cursor = len(m.indices) - 1
 	}
+	m.clampNameOffset()
 	m.ensureCursorVisible()
 }
 
@@ -422,9 +536,77 @@ func (m Model) currentRun() (model.RunRecord, bool) {
 	return m.st.Discovered[m.indices[m.cursor]], true
 }
 
+func (m Model) paneWidths() (int, int) {
+	w := m.width
+	if w <= 0 {
+		w = 120
+	}
+	if w < 72 {
+		w = 72
+	}
+	left := int(float64(w) * 0.56)
+	if left < 34 {
+		left = 34
+	}
+	right := w - left - 1
+	if right < 24 {
+		right = 24
+		left = w - right - 1
+		if left < 30 {
+			left = 30
+			right = w - left - 1
+		}
+	}
+	return left, right
+}
+
+func (m Model) listNameWidth() int {
+	left, _ := m.paneWidths()
+	content := max(16, left-4)
+	w := content - 11 // cursor + selected + run + spaces
+	if w < 8 {
+		w = 8
+	}
+	return w
+}
+
+func (m *Model) clampNameOffset() {
+	r, ok := m.currentRun()
+	if !ok {
+		m.nameOffset = 0
+		return
+	}
+	_, off, maxOff := windowText(r.Name, m.nameOffset, m.listNameWidth())
+	if maxOff == 0 {
+		m.nameOffset = 0
+		return
+	}
+	m.nameOffset = off
+}
+
+func (m *Model) shiftNameOffset(delta int) {
+	r, ok := m.currentRun()
+	if !ok {
+		m.statusMsg = "当前无可操作条目"
+		m.statusLevel = "warn"
+		return
+	}
+	_, off, maxOff := windowText(r.Name, m.nameOffset+delta, m.listNameWidth())
+	m.nameOffset = off
+	if maxOff == 0 {
+		m.statusMsg = "当前名称无需水平滚动"
+		m.statusLevel = "info"
+		return
+	}
+	m.statusMsg = fmt.Sprintf("名称窗口偏移: %d/%d", m.nameOffset, maxOff)
+	m.statusLevel = "info"
+}
+
 func (m Model) renderListPane(width int) string {
-	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("111")).Render("Discovered")
-	lines := []string{header}
+	contentWidth := max(12, width-4)
+	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75")).Render("Discovered")
+	nameHint := styleFaint.Render("(←/→ 查看完整名称)")
+	lines := []string{clipRunes(header+" "+nameHint, contentWidth)}
 	if len(m.indices) == 0 {
 		lines = append(lines, styleFaint.Render("(no runs matched)"))
 		return stylePane.Width(width).Render(strings.Join(lines, "\n"))
@@ -438,6 +620,7 @@ func (m Model) renderListPane(width int) string {
 	if end > len(m.indices) {
 		end = len(m.indices)
 	}
+	nameWidth := m.listNameWidth()
 	for i := start; i < end; i++ {
 		r := m.st.Discovered[m.indices[i]]
 		cursor := " "
@@ -452,10 +635,14 @@ func (m Model) renderListPane(width int) string {
 		if r.IsRunning {
 			runState = styleOK.Render("RUN")
 		}
-		leftText := fmt.Sprintf("%s | %s", r.Name, shortPath(r.SourcePath, 3))
-		line := fmt.Sprintf("%s %s %-4s %s", cursor, sel, runState, trim(leftText, max(20, width-18)))
+		offset := 0
 		if i == m.cursor {
-			line = styleCursor.Render(line)
+			offset = m.nameOffset
+		}
+		namePart, _, _ := windowText(r.Name, offset, nameWidth)
+		line := fmt.Sprintf("%s %s %s %s", cursor, sel, runState, clipRunes(namePart, nameWidth))
+		if i == m.cursor {
+			line = styleRowActive.Render(line)
 		}
 		lines = append(lines, line)
 	}
@@ -466,26 +653,80 @@ func (m Model) renderListPane(width int) string {
 }
 
 func (m Model) renderDetailPane(width int) string {
-	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("141")).Render("Detail")
-	lines := []string{header}
+	contentWidth := max(14, width-4)
+	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("150")).Render("Detail")
+	lines := []string{clipRunes(header, contentWidth)}
 	r, ok := m.currentRun()
 	if !ok {
 		lines = append(lines, styleFaint.Render("(none)"))
 		return stylePane.Width(width).Render(strings.Join(lines, "\n"))
 	}
-	selState := styleWarn.Render("no")
+	selState := styleWarn.Render("NO")
 	if _, ok := m.draftSelected[r.ID]; ok {
-		selState = styleOK.Render("yes")
+		selState = styleOK.Render("YES")
+	}
+	runningState := styleWarn.Render("IDLE")
+	if r.IsRunning {
+		runningState = styleOK.Render("RUNNING")
 	}
 	lines = append(lines,
-		"id: "+r.ID,
-		"name: "+r.Name,
+		clipRunes("id: "+r.ID, contentWidth),
+		clipRunes("name: "+r.Name, contentWidth),
 		"selected(draft): "+selState,
-		fmt.Sprintf("running: %t", r.IsRunning),
-		"updated: "+r.LastUpdatedAt.Format(time.RFC3339),
-		"watch_root: "+r.WatchRoot,
-		"source: "+r.SourcePath,
+		"running: "+runningState,
+		clipRunes("updated: "+r.LastUpdatedAt.Format(time.RFC3339), contentWidth),
+		clipRunes("watch_root: "+r.WatchRoot, contentWidth),
+		clipRunes("source: "+r.SourcePath, contentWidth),
 	)
+
+	tbState := styleWarn.Render("STOPPED")
+	if m.tbRunning {
+		tbState = styleOK.Render("RUNNING")
+	}
+	tbURL := fmt.Sprintf("http://%s:%d", m.cfg.TensorBoard.Host, m.cfg.TensorBoard.Port)
+	lines = append(lines,
+		"",
+		clipRunes("TensorBoard", contentWidth),
+		"status: "+tbState,
+		clipRunes(fmt.Sprintf("pid: %d", m.tbPID), contentWidth),
+		clipRunes("url: "+tbURL, contentWidth),
+	)
+	if m.tbErr != nil {
+		lines = append(lines, styleWarn.Render(clipRunes("process_err: "+m.tbErr.Error(), contentWidth)))
+	}
+
+	autoState := styleWarn.Render("OFF")
+	if m.cfg.Tailscale.AutoServe {
+		autoState = styleOK.Render("ON")
+	}
+	serveState := styleWarn.Render("OFF")
+	if m.tailscaleServeOn {
+		serveState = styleOK.Render("ON")
+	}
+	lines = append(lines,
+		"",
+		clipRunes("Tailscale", contentWidth),
+		"auto_serve: "+autoState,
+	)
+	if !m.tailscaleDetected {
+		lines = append(lines, styleWarn.Render(clipRunes("binary: not found", contentWidth)))
+	} else {
+		lines = append(lines,
+			clipRunes("binary: "+m.tailscaleBinary, contentWidth),
+			clipRunes("method: "+m.tailscaleMethod, contentWidth),
+			"serve: "+serveState,
+		)
+		if m.tailscaleURL != "" {
+			lines = append(lines, clipRunes("tailnet: "+m.tailscaleURL, contentWidth))
+		} else {
+			lines = append(lines, styleFaint.Render(clipRunes("tailnet: (not available)", contentWidth)))
+		}
+	}
+	if m.tailscaleErr != nil {
+		lines = append(lines, styleWarn.Render(clipRunes("tailscale_err: "+m.tailscaleErr.Error(), contentWidth)))
+	}
+	lines = append(lines, styleFaint.Render(clipRunes("keys: g toggle serve | m toggle auto", contentWidth)))
+
 	return stylePane.Width(width).Render(strings.Join(lines, "\n"))
 }
 
@@ -516,6 +757,81 @@ func (m Model) syncCmd() tea.Cmd {
 	}
 }
 
+func (m Model) refreshProcessCmd() tea.Cmd {
+	cfg := m.cfg
+	return func() tea.Msg {
+		running, pid, err := process.Status(cfg.Managed.PidPath)
+		return processStatusMsg{running: running, pid: pid, err: err}
+	}
+}
+
+func (m Model) refreshTailscaleCmd(autoEnsure bool) tea.Cmd {
+	cfg := m.cfg
+	return func() tea.Msg {
+		det, err := tailscale.Detect(cfg.Tailscale.Binary)
+		if err != nil {
+			return tailscaleStatusMsg{detected: false, err: err}
+		}
+		msg := tailscaleStatusMsg{
+			detected: true,
+			binary:   det.Path,
+			method:   det.Method,
+		}
+		statusOut, statusErr := tailscale.ServeStatus(det.Path)
+		if statusErr == nil {
+			msg.url = tailscale.ParseServeURL(statusOut)
+			msg.serveOn = msg.url != ""
+		}
+		if autoEnsure && cfg.Tailscale.AutoServe && !msg.serveOn {
+			serveOut, serveErr := tailscale.RunServe(det.Path, cfg.Tailscale.ServeURL)
+			if strings.TrimSpace(serveOut) != "" {
+				msg.note = firstLine(serveOut)
+			}
+			if serveErr != nil {
+				msg.err = serveErr
+				return msg
+			}
+			statusOut, statusErr = tailscale.ServeStatus(det.Path)
+			if statusErr == nil {
+				msg.url = tailscale.ParseServeURL(statusOut)
+				msg.serveOn = msg.url != ""
+			}
+			if msg.url != "" {
+				msg.note = "已自动开启 tailscale serve"
+			}
+		}
+		if statusErr != nil && msg.err == nil {
+			msg.err = statusErr
+		}
+		return msg
+	}
+}
+
+func (m Model) tailscaleToggleCmd(enable bool) tea.Cmd {
+	cfg := m.cfg
+	return func() tea.Msg {
+		det, err := tailscale.Detect(cfg.Tailscale.Binary)
+		if err != nil {
+			return tailscaleActionMsg{enable: enable, err: err}
+		}
+		if enable {
+			out, runErr := tailscale.RunServe(det.Path, cfg.Tailscale.ServeURL)
+			return tailscaleActionMsg{enable: enable, out: out, err: runErr}
+		}
+		out, runErr := tailscale.RunServeOff(det.Path)
+		return tailscaleActionMsg{enable: enable, out: out, err: runErr}
+	}
+}
+
+func (m Model) saveAutoServeCmd(auto bool) tea.Cmd {
+	cfg := m.cfg
+	cfg.Tailscale.AutoServe = auto
+	return func() tea.Msg {
+		err := config.Save(m.cfgPath, cfg)
+		return autoServeSavedMsg{auto: auto, err: err}
+	}
+}
+
 func pruneUnknownSelected(sel *map[string]model.SelectionEntry, st model.State) {
 	known := make(map[string]struct{}, len(st.Discovered))
 	for _, r := range st.Discovered {
@@ -529,7 +845,7 @@ func pruneUnknownSelected(sel *map[string]model.SelectionEntry, st model.State) 
 }
 
 func helpText() string {
-	return styleFaint.Render("keys: j/k or ↑/↓ move | space toggle | x clear selected | / search | r running | t today | c clear filter | s sync | a apply | ? help | q quit")
+	return styleFaint.Render("keys: j/k or ↑/↓ move | ←/→ name-scroll | space toggle | x clear selected | / search | r running | t today | c clear filter | s sync | a apply | g tailscale on/off | m auto_serve on/off | ? help | q quit")
 }
 
 func filterSummary(f model.Filter) string {
@@ -562,33 +878,76 @@ func filterSummary(f model.Filter) string {
 	return strings.Join(parts, ",")
 }
 
-func trim(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	if len(s) <= n {
-		return s
-	}
-	if n <= 3 {
-		return s[:n]
-	}
-	return s[:n-3] + "..."
-}
-
-func shortPath(path string, depth int) string {
-	if path == "" {
-		return path
-	}
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) <= depth {
-		return path
-	}
-	return ".../" + strings.Join(parts[len(parts)-depth:], "/")
-}
-
 func max(a, b int) int {
 	if a > b {
 		return a
 	}
 	return b
+}
+
+func clipRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	if n <= 1 {
+		return string(r[:n])
+	}
+	return string(r[:n-1]) + "…"
+}
+
+func windowText(s string, offset, width int) (string, int, int) {
+	if width <= 0 {
+		return "", 0, 0
+	}
+	r := []rune(s)
+	if len(r) <= width {
+		return s, 0, 0
+	}
+	if width < 3 {
+		if offset < 0 {
+			offset = 0
+		}
+		if offset >= len(r) {
+			offset = len(r) - 1
+		}
+		return string(r[offset]), offset, len(r) - 1
+	}
+
+	segmentWidth := width - 2
+	maxOffset := len(r) - segmentWidth
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	end := offset + segmentWidth
+	if end > len(r) {
+		end = len(r)
+	}
+	leftMark := " "
+	rightMark := " "
+	if offset > 0 {
+		leftMark = "<"
+	}
+	if end < len(r) {
+		rightMark = ">"
+	}
+	return leftMark + string(r[offset:end]) + rightMark, offset, maxOffset
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	parts := strings.Split(s, "\n")
+	return strings.TrimSpace(parts[0])
 }
