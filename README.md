@@ -17,25 +17,33 @@
 - 已安装 TensorBoard（`tensorboard` 命令可用）
 - 可选：已安装 Tailscale（用于 tailnet 暴露）
 
-### 1. 无需 Go 的安装方式（推荐）
+### 1. 无需 Go 的安装方式（首推）
 
-直接安装预编译二进制（不需要 Go 工具链）：
+首推两种方式，**都不需要 Go 工具链**：
+
+方式 A：`curl` 一键安装（网络可直连 GitHub）
 
 ```bash
-bash scripts/install_tbmux_binary.sh
+curl -fsSL https://raw.githubusercontent.com/GalaxyOg/tbmux/master/scripts/install_tbmux_binary.sh | TBMUX_VERSION=v0.2.2 bash
 tbmux version
 ```
 
-也可以远程执行（适合没有 git 的机器）：
+方式 B：手动下载 release 包后本地安装（适合 `curl` 受限机器）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/GalaxyOg/tbmux/master/scripts/install_tbmux_binary.sh | bash
+# 假设当前目录已有 tbmux_0.2.2_linux_amd64.tar.gz
+tar -xzf tbmux_0.2.2_linux_amd64.tar.gz
+mkdir -p "$HOME/.local/bin"
+install -m 0755 ./tbmux "$HOME/.local/bin/tbmux"
+grep -q 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+source "$HOME/.bashrc"
+tbmux version
 ```
 
-可选参数：
+`curl` 安装可选参数：
 
 - `TBMUX_REPO=GalaxyOg/tbmux`（默认）
-- `TBMUX_VERSION=latest` 或固定版本（例如 `v0.2.0`）
+- `TBMUX_VERSION=latest` 或固定版本（例如 `v0.2.2`）
 - `TBMUX_PREFIX=$HOME/.local`（安装前缀）
 
 ### 2. 需要源码构建时，再安装 Go（非 root）

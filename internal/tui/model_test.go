@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"tbmux/internal/app"
 	"tbmux/internal/config"
@@ -178,5 +179,60 @@ func TestHorizontalNameScroll(t *testing.T) {
 	m3 := out.(Model)
 	if m3.nameOffset <= 0 {
 		t.Fatalf("expected name offset > 0 after right key")
+	}
+}
+
+func TestPaneWidthsAreRespected(t *testing.T) {
+	m := testModel()
+	out, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	m2 := out.(Model)
+
+	leftW, rightW := m2.paneWidths()
+	leftPane := m2.renderListPane(leftW)
+	rightPane := m2.renderDetailPane(rightW)
+	if lipgloss.Width(leftPane) != leftW {
+		t.Fatalf("left pane width mismatch: got=%d want=%d", lipgloss.Width(leftPane), leftW)
+	}
+	if lipgloss.Width(rightPane) != rightW {
+		t.Fatalf("right pane width mismatch: got=%d want=%d", lipgloss.Width(rightPane), rightW)
+	}
+	joined := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, " ", rightPane)
+	if lipgloss.Width(joined) != m2.width {
+		t.Fatalf("joined width mismatch: got=%d want=%d", lipgloss.Width(joined), m2.width)
+	}
+}
+
+func TestDetailPaneLongFieldsDoNotOverflow(t *testing.T) {
+	now := time.Now().UTC()
+	longName := "very_very_very_very_very_very_very_very_long_training_run_name_without_spaces_for_wrap_safety"
+	longPath := "/home/yh/super/long/path/for/tensorboard/runs/that/should/not/break/the/detail/pane/right/border/when/rendering/events.out.tfevents.1234567890"
+	m := New("/tmp/config.toml", config.Config{
+		TensorBoard: config.TensorBoard{Host: "127.0.0.1", Port: 6786},
+	}, model.State{
+		Version: 1,
+		Discovered: []model.RunRecord{
+			{
+				ID:            "r-long",
+				Name:          longName,
+				SourcePath:    longPath,
+				WatchRoot:     "/home/yh/Algo_test/ReinFlow",
+				LastUpdatedAt: now,
+				IsRunning:     true,
+			},
+		},
+		Selected: map[string]model.SelectionEntry{},
+	}, model.Filter{})
+	m.tailscaleDetected = true
+	m.tailscaleServeOn = true
+	m.tailscaleURL = "https://drlserver.tailb5bd65.ts.net/very/long/path/that/should/wrap/properly"
+
+	out, _ := m.Update(tea.WindowSizeMsg{Width: 86, Height: 22})
+	m2 := out.(Model)
+	_, rightW := m2.paneWidths()
+	rightPane := m2.renderDetailPane(rightW)
+	for i, line := range strings.Split(rightPane, "\n") {
+		if lipgloss.Width(line) > rightW {
+			t.Fatalf("line %d overflows right pane: got=%d want<=%d line=%q", i, lipgloss.Width(line), rightW, line)
+		}
 	}
 }

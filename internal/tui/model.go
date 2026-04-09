@@ -609,7 +609,7 @@ func (m Model) renderListPane(width int) string {
 	lines := []string{clipRunes(header+" "+nameHint, contentWidth)}
 	if len(m.indices) == 0 {
 		lines = append(lines, styleFaint.Render("(no runs matched)"))
-		return stylePane.Width(width).Render(strings.Join(lines, "\n"))
+		return renderPane(width, strings.Join(lines, "\n"))
 	}
 	cap := m.listRowsCapacity()
 	start := m.listTop
@@ -649,7 +649,7 @@ func (m Model) renderListPane(width int) string {
 	if end < len(m.indices) {
 		lines = append(lines, styleFaint.Render(fmt.Sprintf("... %d more", len(m.indices)-end)))
 	}
-	return stylePane.Width(width).Render(strings.Join(lines, "\n"))
+	return renderPane(width, strings.Join(lines, "\n"))
 }
 
 func (m Model) renderDetailPane(width int) string {
@@ -659,7 +659,7 @@ func (m Model) renderDetailPane(width int) string {
 	r, ok := m.currentRun()
 	if !ok {
 		lines = append(lines, styleFaint.Render("(none)"))
-		return stylePane.Width(width).Render(strings.Join(lines, "\n"))
+		return renderPane(width, strings.Join(lines, "\n"))
 	}
 	selState := styleWarn.Render("NO")
 	if _, ok := m.draftSelected[r.ID]; ok {
@@ -669,15 +669,13 @@ func (m Model) renderDetailPane(width int) string {
 	if r.IsRunning {
 		runningState = styleOK.Render("RUNNING")
 	}
-	lines = append(lines,
-		clipRunes("id: "+r.ID, contentWidth),
-		clipRunes("name: "+r.Name, contentWidth),
-		"selected(draft): "+selState,
-		"running: "+runningState,
-		clipRunes("updated: "+r.LastUpdatedAt.Format(time.RFC3339), contentWidth),
-		clipRunes("watch_root: "+r.WatchRoot, contentWidth),
-		clipRunes("source: "+r.SourcePath, contentWidth),
-	)
+	lines = appendWrappedKV(lines, "id", r.ID, contentWidth)
+	lines = appendWrappedKV(lines, "name", r.Name, contentWidth)
+	lines = append(lines, "selected(draft): "+selState)
+	lines = append(lines, "running: "+runningState)
+	lines = appendWrappedKV(lines, "updated", r.LastUpdatedAt.Format(time.RFC3339), contentWidth)
+	lines = appendWrappedKV(lines, "watch_root", r.WatchRoot, contentWidth)
+	lines = appendWrappedKV(lines, "source", r.SourcePath, contentWidth)
 
 	tbState := styleWarn.Render("STOPPED")
 	if m.tbRunning {
@@ -688,11 +686,11 @@ func (m Model) renderDetailPane(width int) string {
 		"",
 		clipRunes("TensorBoard", contentWidth),
 		"status: "+tbState,
-		clipRunes(fmt.Sprintf("pid: %d", m.tbPID), contentWidth),
-		clipRunes("url: "+tbURL, contentWidth),
 	)
+	lines = appendWrappedKV(lines, "pid", fmt.Sprintf("%d", m.tbPID), contentWidth)
+	lines = appendWrappedKV(lines, "url", tbURL, contentWidth)
 	if m.tbErr != nil {
-		lines = append(lines, styleWarn.Render(clipRunes("process_err: "+m.tbErr.Error(), contentWidth)))
+		lines = appendWrappedKVStyle(lines, "process_err", m.tbErr.Error(), contentWidth, styleWarn)
 	}
 
 	autoState := styleWarn.Render("OFF")
@@ -709,25 +707,23 @@ func (m Model) renderDetailPane(width int) string {
 		"auto_serve: "+autoState,
 	)
 	if !m.tailscaleDetected {
-		lines = append(lines, styleWarn.Render(clipRunes("binary: not found", contentWidth)))
+		lines = appendWrappedKVStyle(lines, "binary", "not found", contentWidth, styleWarn)
 	} else {
-		lines = append(lines,
-			clipRunes("binary: "+m.tailscaleBinary, contentWidth),
-			clipRunes("method: "+m.tailscaleMethod, contentWidth),
-			"serve: "+serveState,
-		)
+		lines = appendWrappedKV(lines, "binary", m.tailscaleBinary, contentWidth)
+		lines = appendWrappedKV(lines, "method", m.tailscaleMethod, contentWidth)
+		lines = append(lines, "serve: "+serveState)
 		if m.tailscaleURL != "" {
-			lines = append(lines, clipRunes("tailnet: "+m.tailscaleURL, contentWidth))
+			lines = appendWrappedKV(lines, "tailnet", m.tailscaleURL, contentWidth)
 		} else {
-			lines = append(lines, styleFaint.Render(clipRunes("tailnet: (not available)", contentWidth)))
+			lines = appendWrappedKVStyle(lines, "tailnet", "(not available)", contentWidth, styleFaint)
 		}
 	}
 	if m.tailscaleErr != nil {
-		lines = append(lines, styleWarn.Render(clipRunes("tailscale_err: "+m.tailscaleErr.Error(), contentWidth)))
+		lines = appendWrappedKVStyle(lines, "tailscale_err", m.tailscaleErr.Error(), contentWidth, styleWarn)
 	}
-	lines = append(lines, styleFaint.Render(clipRunes("keys: g toggle serve | m toggle auto", contentWidth)))
+	lines = appendWrappedStyle(lines, "keys: g toggle serve | m toggle auto", contentWidth, styleFaint)
 
-	return stylePane.Width(width).Render(strings.Join(lines, "\n"))
+	return renderPane(width, strings.Join(lines, "\n"))
 }
 
 func (m Model) applyCmd() tea.Cmd {
@@ -950,4 +946,65 @@ func firstLine(s string) string {
 	}
 	parts := strings.Split(s, "\n")
 	return strings.TrimSpace(parts[0])
+}
+
+func renderPane(outerWidth int, body string) string {
+	// Lipgloss Width() is content-box width; border adds 2 extra columns.
+	innerWidth := max(1, outerWidth-2)
+	return stylePane.Width(innerWidth).Render(body)
+}
+
+func appendWrapped(lines []string, text string, width int) []string {
+	return append(lines, wrapDisplay(text, width)...)
+}
+
+func appendWrappedStyle(lines []string, text string, width int, style lipgloss.Style) []string {
+	for _, line := range wrapDisplay(text, width) {
+		lines = append(lines, style.Render(line))
+	}
+	return lines
+}
+
+func appendWrappedKV(lines []string, key, value string, width int) []string {
+	return appendWrapped(lines, key+": "+value, width)
+}
+
+func appendWrappedKVStyle(lines []string, key, value string, width int, style lipgloss.Style) []string {
+	return appendWrappedStyle(lines, key+": "+value, width, style)
+}
+
+func wrapDisplay(text string, width int) []string {
+	if width <= 0 {
+		return []string{""}
+	}
+	parts := strings.Split(text, "\n")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p == "" {
+			out = append(out, "")
+			continue
+		}
+		cur := make([]rune, 0, len(p))
+		curW := 0
+		for _, r := range []rune(p) {
+			rw := lipgloss.Width(string(r))
+			if rw <= 0 {
+				continue
+			}
+			if curW+rw > width && len(cur) > 0 {
+				out = append(out, string(cur))
+				cur = cur[:0]
+				curW = 0
+			}
+			cur = append(cur, r)
+			curW += rw
+		}
+		if len(cur) > 0 {
+			out = append(out, string(cur))
+		}
+	}
+	if len(out) == 0 {
+		return []string{""}
+	}
+	return out
 }
