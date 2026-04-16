@@ -1,0 +1,4 @@
+interface:
+  display_name: "tbmux CLI"
+  short_description: "Manage TensorBoard run aggregation with tbmux"
+  default_prompt: "Use tbmux commands to discover runs, update selected set, and control TensorBoard/Tailscale status on this machine."
